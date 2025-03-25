@@ -1,4 +1,4 @@
-('C:\\Users\\romano.juanp\\Documents\\Git\\Personal\\simplePDFReader\\build\\barereader\\PYZ-00.pyz',
+('C:\\Users\\romano.juanp\\Documents\\Git\\soupit\\baretools\\BareReader\\build\\barereader\\PYZ-00.pyz',
  [('PIL',
    'C:\\Users\\romano.juanp\\AppData\\Roaming\\Python\\Python313\\site-packages\\PIL\\__init__.py',
    'PYMODULE'),
