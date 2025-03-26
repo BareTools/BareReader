@@ -13,6 +13,7 @@ from kivy.core.window import Window
 from kivy.graphics.texture import Texture
 from PIL import Image as PILImage
 from kivy.uix.popup import Popup
+from kivy.clock import Clock
 
 class PDFViewer(BoxLayout):
     def __init__(self, **kwargs):
@@ -26,9 +27,9 @@ class PDFViewer(BoxLayout):
 
         # Toolbar
         toolbar = BoxLayout(size_hint_y=None, height=50)
-        toolbar.add_widget(Button(text='Open PDF', on_press=self.open_pdf))
-        toolbar.add_widget(Button(text='<< Prev', on_press=self.prev_page))
-        toolbar.add_widget(Button(text='Next >>', on_press=self.next_page))
+        toolbar.add_widget(Button(text='Open', on_press=self.open_pdf))
+        # toolbar.add_widget(Button(text='<< Prev', on_press=self.prev_page))
+        # toolbar.add_widget(Button(text='Next >>', on_press=self.next_page))
         toolbar.add_widget(Button(text='Zoom +', on_press=self.zoom_in))
         toolbar.add_widget(Button(text='Zoom -', on_press=self.zoom_out))
         self.page_input = TextInput(text='1', multiline=False, size_hint_x=None, width=80)
@@ -37,12 +38,21 @@ class PDFViewer(BoxLayout):
         self.add_widget(toolbar)
 
         # Scrollable image viewer
-        self.scroll = ScrollView(do_scroll_x=False)
-        self.image_widget = Image(allow_stretch=True, keep_ratio=True, size_hint_y=None)
+        self.scroll = ScrollView(do_scroll_x=False, do_scroll_y=True)
+        self.image_widget = Image(size_hint_y=None)
         self.scroll.add_widget(self.image_widget)
         self.add_widget(self.scroll)
 
+        # self.scroll.bind(on_scroll_y=self.check_scroll_position)
+
         Window.bind(on_key_down=self.on_key_down)
+        Window.bind(on_scroll=self.on_scroll)
+
+    def update_title(self):
+        if self.current_doc:
+            App.get_running_app().title = f"BareReader - Page {self.current_page + 1} of {self.page_count} - Zoom {int(self.zoom * 100)}%"
+        else:
+            App.get_running_app().title = "BareReader"
 
     def open_pdf(self, instance):
         from kivy.utils import platform
@@ -75,14 +85,16 @@ class PDFViewer(BoxLayout):
             mat = fitz.Matrix(self.zoom, self.zoom).prerotate(180)
             pix = page.get_pixmap(matrix=mat, alpha=False)
             image = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            # 🔄 Corregir espejado: flip horizontal
             image = image.transpose(PILImage.FLIP_LEFT_RIGHT)
 
             texture = self.pil_to_texture(image)
             self.image_widget.texture = texture
+            self.image_widget.size_hint_y = None
             self.image_widget.height = texture.height
             self.page_input.text = str(self.current_page + 1)
+            self.update_title()
+
+            Clock.schedule_once(lambda dt: setattr(self.scroll, 'scroll_y', 1))
         except Exception as e:
             self.show_popup(f"Error loading page: {e}")
 
@@ -91,15 +103,25 @@ class PDFViewer(BoxLayout):
         tex.blit_buffer(image.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
         return tex
 
-    def next_page(self, instance=None):
-        if self.current_page < self.page_count - 1:
+    def scroll_down(self):
+        if self.scroll.scroll_y > 0.0:
+            self.scroll.scroll_y = max(0.0, self.scroll.scroll_y - 0.1)
+        elif self.current_page < self.page_count - 1:
             self.current_page += 1
             self.load_page()
 
-    def prev_page(self, instance=None):
-        if self.current_page > 0:
+    def scroll_up(self):
+        if self.scroll.scroll_y < 1.0:
+            self.scroll.scroll_y = min(1.0, self.scroll.scroll_y + 0.1)
+        elif self.current_page > 0:
             self.current_page -= 1
             self.load_page()
+
+    def next_page(self, instance=None):
+        self.scroll_down()
+
+    def prev_page(self, instance=None):
+        self.scroll_up()
 
     def zoom_in(self, instance):
         self.zoom += 0.1
@@ -119,11 +141,23 @@ class PDFViewer(BoxLayout):
         except:
             pass
 
-    def on_key_down(self, window, key, scancode, codepoint, modifier):
+    def on_key_down(self, window, key, scancode, codepoint, modifiers):
         if key == 273:  # Up
-            self.prev_page()
+            self.scroll_up()
         elif key == 274:  # Down
-            self.next_page()
+            self.scroll_down()
+
+    def on_scroll(self, window, scroll_x, scroll_y, x, y):
+        if scroll_y < 0:
+            self.scroll_down()
+        elif scroll_y > 0:
+            self.scroll_up()
+        elif scroll_y > 0:
+            if self.scroll.scroll_y < 1.0:
+                self.scroll.scroll_y = min(1.0, self.scroll.scroll_y + 0.1)
+            elif self.current_page > 0:
+                self.current_page -= 1
+                self.load_page()
 
     def show_popup(self, message):
         content = BoxLayout(orientation='vertical')
