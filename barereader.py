@@ -8,6 +8,12 @@ import random
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import json
+import warnings
+
+# Ignore ePub warnings
+warnings.simplefilter("ignore", UserWarning)
+warnings.simplefilter("ignore", FutureWarning)
+
 
 class PDFViewer:
     def __init__(self, root):
@@ -138,8 +144,9 @@ class PDFViewer:
             self.root.destroy()
         
     def on_resize(self, event):
-        if self.pdf_path:
-            self.fit_to_width()
+        if hasattr(self, 'pdf_path') and self.pdf_path:
+            if hasattr(self, 'active_tab_data') and self.active_tab_data:
+                self.fit_to_width()
 
     def open_pdf(self, filepath):
         if filepath:
@@ -190,26 +197,57 @@ class PDFViewer:
             self.show_page()
     
     def open_epub(self, filepath):
+        file_name = os.path.basename(filepath)
+        if file_name in self.tabs:
+            self.tab_control.select(self.tabs[file_name]['tab'])
+            return
+
+        new_tab = tk.Frame(self.tab_control)
+        while True:
+            color = f'#{random.randint(50,200):02x}{random.randint(50,200):02x}{random.randint(50,200):02x}'
+            if color not in self.used_colors:
+                self.used_colors.add(color)
+                break
+
+        tab_color = color
+        colors = ["📕", "📘", "📗", "📙", "📓", "📔"]
+        emoji = colors[len(self.used_colors) % len(colors)]
+        tab_text = f"{emoji} {file_name}"
+        self.tab_control.add(new_tab, text=tab_text)
+        self.tab_control.select(new_tab)
+
+        color_bar = tk.Frame(new_tab, width=10, bg=tab_color)
+        color_bar.pack(side="left", fill="y")
+
         try:
             book = epub.read_epub(filepath)
-            text = ""
-            for item in book.get_items():
-                if item.get_type() == epub.EpubHtml:
-                    soup = BeautifulSoup(item.get_content(), 'html.parser')
-                    text += soup.get_text() + "\n\n"
-            
-            # Show the text in a scrollable Text widget
-            epub_window = tk.Toplevel(self.root)
-            epub_window.title(f"BareReader - {os.path.basename(filepath)}")
-            text_widget = tk.Text(epub_window, wrap="word", bg="white", fg="black")
-            text_widget.insert("1.0", text)
-            text_widget.pack(fill="both", expand=True)
-            scrollbar = tk.Scrollbar(epub_window, command=text_widget.yview)
-            scrollbar.pack(side="right", fill="y")
-            text_widget.config(yscrollcommand=scrollbar.set)
-
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open EPUB.\n\n{e}")
+            return
+
+        content_text = ""
+        for item in book.get_items():
+            if item.get_type() == 'application/xhtml+xml':  # For XHTML content
+                soup = BeautifulSoup(item.get_content(), 'html.parser')
+                content_text += soup.get_text() + "\n\n"
+
+        text_widget = tk.Text(new_tab, wrap="word")
+        text_widget.insert("1.0", content_text.strip())
+        text_widget.config(state="disabled")
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(new_tab, orient="vertical", command=text_widget.yview)
+        scrollbar.pack(side="right", fill="y")
+        text_widget.config(yscrollcommand=scrollbar.set)
+
+        # Add 'scroll' and 'epub_path' keys to the tab data for EPUB
+        self.tabs[file_name] = {
+            "frame": new_tab,
+            "epub_path": filepath,  # for EPUB
+            "color": tab_color,
+            "text_widget": text_widget,
+            "scroll": 0  # Initialize scroll position
+        }
 
     def open_file(self):
         filepath = filedialog.askopenfilename(filetypes=[("PDF or EPUB", "*.pdf *.epub")])
@@ -221,26 +259,40 @@ class PDFViewer:
 
     def on_tab_change(self, event):
         selected_tab = event.widget.select()
+        
         if self.last_tab:
             for name, tab_data in self.tabs.items():
                 if str(tab_data['frame']) == str(self.last_tab):
+                    # Make sure the necessary keys exist before accessing them
                     tab_data['current_page'] = self.current_page
                     tab_data['zoom'] = self.zoom
-                    tab_data['scroll'] = self.canvas.yview()[0]
+                    tab_data['scroll'] = self.canvas.yview()[0] if 'pdf_path' in tab_data else tab_data['text_widget'].yview()[0]
                     break
 
         for name, tab_data in self.tabs.items():
             if str(tab_data['frame']) == str(selected_tab):
                 self.active_tab_data = tab_data
-                self.pdf_path = tab_data['pdf_path']
-                self.current_doc = tab_data['doc']
-                self.current_page = tab_data['current_page']
-                self.zoom = tab_data['zoom']
-                self.page_count = len(self.current_doc)
-                self.load_page_image()
-                self.show_page()
-                scroll_value = tab_data['scroll']
-                self.root.after(50, lambda: self.canvas.yview_moveto(scroll_value))
+
+                # Handle PDF-specific data
+                self.pdf_path = tab_data.get('pdf_path', None)
+                self.current_doc = tab_data.get('doc', None)
+                self.current_page = tab_data.get('current_page', 0)
+                self.zoom = tab_data.get('zoom', 1.0)
+                self.page_count = len(self.current_doc) if self.current_doc else 0
+
+                if self.current_doc:
+                    self.load_page_image()
+                    self.show_page()
+
+                # Handle EPUB-specific data
+                text_widget = tab_data.get('text_widget', None)
+                scroll_value = tab_data.get('scroll', 0.0)
+
+                if text_widget:
+                    self.root.after(50, lambda tw=text_widget, sv=scroll_value: tw.yview_moveto(sv))
+                else:
+                    self.root.after(50, lambda: self.canvas.yview_moveto(scroll_value))  # PDF scroll restore
+
                 break
 
         self.last_tab = selected_tab
