@@ -6,6 +6,8 @@ import os
 import sys
 import random
 import json
+import pyperclip
+import time
 
 class PDFViewer:
     def __init__(self, root):
@@ -41,6 +43,8 @@ class PDFViewer:
         self.root.bind("<Configure>", self.on_resize)
         self.image_container = self.canvas.create_image(0, 0, anchor='n')
 
+        self.zoom = 1.0  # Default zoom (no scaling)
+
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=4)
         tk.Button(btn_frame, text="Open PDF", command=self.open_pdf).pack(side="left", padx=2)
@@ -59,6 +63,15 @@ class PDFViewer:
         self.root.bind("<Button-4>", self.on_mouse_scroll)
         self.root.bind("<Button-5>", self.on_mouse_scroll)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # Track mouse events for selection
+        self.canvas.bind("<ButtonPress-1>", self.on_mouse_press)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
+
+        # Selection data
+        self.selection_start = None
+        self.selection_end = None
 
         self.current_page = 0
         self.page_count = 0
@@ -305,13 +318,112 @@ class PDFViewer:
         elif event.num == 5 or event.delta < 0:
             self.scroll_down()
 
+    def on_mouse_press(self, event):
+        # Convert to canvas coordinates
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        self.selection_start = (x, y)
+        self.selection_end = None
+        self.redraw_selection()
+
+    def on_mouse_drag(self, event):
+        if self.selection_start:
+            x = self.canvas.canvasx(event.x)
+            y = self.canvas.canvasy(event.y)
+            self.selection_end = (x, y)
+            self.redraw_selection()
+
+    def on_mouse_release(self, event):
+        if self.selection_start and self.selection_end:
+            if self.copy_selection_to_clipboard():
+                messagebox.showinfo("Success", "Text copied to clipboard!")
+            else:
+                messagebox.showwarning("No text", "Could not extract any text from the selection.")
+            self.clear_selection()
+
+    def flash_selection(self, color):
+        """Flash the selection box with specified color."""
+        for _ in range(2):
+            self.canvas.itemconfig("selection", outline=color)
+            self.canvas.update()
+            time.sleep(0.1)
+            self.canvas.itemconfig("selection", outline="red")
+            self.canvas.update()
+            time.sleep(0.1)
+        self.clear_selection()
+
+    def clear_selection(self):
+        """Clear the selection visually."""
+        self.canvas.delete("selection")
+        self.selection_start = None
+        self.selection_end = None
+    
+    def redraw_selection(self):
+        """Redraw the selection rectangle."""
+        if self.selection_start and self.selection_end:
+            x1, y1 = self.selection_start
+            x2, y2 = self.selection_end
+            self.canvas.delete("selection")  # Delete the previous rectangle
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline="green", width=2, tags="selection")
+
+    def copy_selection_to_clipboard(self):
+        """Copy selected text to clipboard based on selection box in PDF."""
+        if not (self.selection_start and self.selection_end):
+            return False
+
+        try:
+            page = self.current_doc.load_page(self.current_page)
+
+            # Get actual image size from the pixmap
+            pix = page.get_pixmap(matrix=fitz.Matrix(self.zoom, self.zoom))
+            pix_width, pix_height = pix.width, pix.height
+
+            # Get canvas coordinates
+            x1_canvas, y1_canvas = self.selection_start
+            x2_canvas, y2_canvas = self.selection_end
+            x1_canvas, x2_canvas = sorted([x1_canvas, x2_canvas])
+            y1_canvas, y2_canvas = sorted([y1_canvas, y2_canvas])
+
+            # Get the image position in the canvas
+            img_x, img_y = self.canvas.coords(self.image_container)
+            displayed_image = self.canvas.image  # ImageTk.PhotoImage
+            disp_width = displayed_image.width()
+            disp_height = displayed_image.height()
+
+            # Compute offsets from the image position
+            x1_rel = (x1_canvas - img_x + disp_width / 2) / disp_width
+            y1_rel = (y1_canvas - img_y) / disp_height
+            x2_rel = (x2_canvas - img_x + disp_width / 2) / disp_width
+            y2_rel = (y2_canvas - img_y) / disp_height
+
+            # Convert to PDF coordinates
+            x1_pdf = x1_rel * pix_width / self.zoom
+            y1_pdf = y1_rel * pix_height / self.zoom
+            x2_pdf = x2_rel * pix_width / self.zoom
+            y2_pdf = y2_rel * pix_height / self.zoom
+
+            rect = fitz.Rect(x1_pdf, y1_pdf, x2_pdf, y2_pdf)
+
+            text = page.get_textbox(rect)
+
+            if text.strip():
+                pyperclip.copy(text.strip())
+                return True
+            else:
+                return False
+
+        except Exception as e:
+            print(f"Error copying text: {e}")
+            return False
+
+
     def zoom_in(self):
         self.zoom += 0.1
         self.load_page_image()
         self.show_page()
 
     def zoom_out(self):
-        if self.zoom > 0.2:
+        if self.zoom > 0.2:  # Prevent zoom from getting too small
             self.zoom -= 0.1
             self.load_page_image()
             self.show_page()
